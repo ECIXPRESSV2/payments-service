@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
 import { createHash } from 'crypto';
@@ -60,6 +60,10 @@ export class WompiService {
     return this.configService.getOrThrow<string>('wompi.eventsSecret');
   }
 
+  private get integritySecret(): string {
+    return this.configService.getOrThrow<string>('wompi.integritySecret');
+  }
+
   /** GET /merchants/:publicKey → devuelve el acceptance_token vigente. */
   async getAcceptanceToken(): Promise<string> {
     const response = await axios.get<{
@@ -81,12 +85,19 @@ export class WompiService {
   ): Promise<Record<string, unknown>> {
     const acceptanceToken = await this.getAcceptanceToken();
 
+    const integrity = createHash('sha256')
+      .update(
+        `${params.topupId}${params.amountInCents}COP${this.integritySecret}`,
+      )
+      .digest('hex');
+
     const body = {
       acceptance_token: acceptanceToken,
       amount_in_cents: params.amountInCents,
       currency: this.configService.get<string>('wompi.currency') ?? 'COP',
       customer_email: params.customerEmail,
       reference: params.topupId,
+      signature: { integrity },
       payment_method: this.buildPaymentMethod(
         params.paymentMethod,
         params.paymentData,
@@ -118,6 +129,15 @@ export class WompiService {
       },
     );
     return response.data.data.status;
+  }
+
+  /** GET /pse/financial_institutions → lista de bancos disponibles para PSE. */
+  async getFinancialInstitutions(): Promise<Record<string, unknown>[]> {
+    const response = await axios.get<{ data: Record<string, unknown>[] }>(
+      `${this.baseUrl}/pse/financial_institutions`,
+      { headers: { Authorization: `Bearer ${this.privateKey}` } },
+    );
+    return response.data.data;
   }
 
   /**
@@ -160,8 +180,6 @@ export class WompiService {
         (acc, key) => (acc as Record<string, unknown>)?.[key],
         data,
       );
-    // Las propiedades firmadas por Wompi son escalares. Se narrowa por typeof para
-    // evitar producir '[object Object]' si llegara un objeto inesperado.
     switch (typeof value) {
       case 'string':
         return value;
@@ -177,9 +195,9 @@ export class WompiService {
   }
 
   /**
-   * Construye el objeto `payment_method` según el método. Nequi, PSE y tarjeta tienen
-   * estructuras distintas; los datos sensibles (token de tarjeta, teléfono, datos PSE)
-   * los recoge y tokeniza el front y llegan en `paymentData`.
+   * Construye el objeto `payment_method` según el método. Los datos sensibles
+   * (token de tarjeta, teléfono, datos PSE) los recoge y tokeniza el front y llegan
+   * en `paymentData`. NUNCA se reciben datos crudos de tarjeta: solo tokens de Wompi.
    */
   private buildPaymentMethod(
     method: TopupPaymentMethod,
@@ -187,26 +205,36 @@ export class WompiService {
   ): Record<string, unknown> {
     switch (method) {
       case TopupPaymentMethod.NEQUI:
-        // Requiere phone_number (lo provee el front).
-        return { type: 'NEQUI', ...paymentData };
-      case TopupPaymentMethod.PSE:
-        // Requiere user_type, user_legal_id_type, user_legal_id,
-        // financial_institution_code, payment_description (los provee el front).
-        return { type: 'PSE', ...paymentData };
+        return {
+          type: 'NEQUI',
+          phone_number: paymentData.phone_number as string,
+        };
+
       case TopupPaymentMethod.DAVIPLATA:
-        return { type: 'DAVIPLATA', ...paymentData };
+        return {
+          type: 'DAVIPLATA',
+          phone_number: paymentData.phone_number as string,
+        };
+
+      case TopupPaymentMethod.PSE:
+        return {
+          type: 'PSE',
+          user_type: paymentData.user_type,
+          user_legal_id_type: paymentData.user_legal_id_type,
+          user_legal_id: paymentData.user_legal_id,
+          financial_institution_code: paymentData.financial_institution_code,
+          payment_description: 'Recarga billetera ECIExpress',
+        };
+
       case TopupPaymentMethod.CARD:
-        // Requiere token (tokenizado por el front con la llave pública) e installments.
-        // NUNCA se reciben datos crudos de tarjeta: solo el token de Wompi.
-        return { type: 'CARD', installments: 1, ...paymentData };
-      case TopupPaymentMethod.BREB:
-        // TODO: Bre-B no está disponible en el sandbox de Wompi; no se implementa en el
-        // checkout hasta que la pasarela lo soporte.
-        throw new Error(
-          'BREB no está soportado actualmente por la pasarela de pagos.',
-        );
+        return {
+          type: 'CARD',
+          token: paymentData.token as string,
+          installments: (paymentData.installments as number) ?? 1,
+        };
+
       default:
-        throw new Error(`Método de pago no soportado: ${method as string}`);
+        throw new BadRequestException('Método de pago no soportado actualmente.');
     }
   }
 }

@@ -59,7 +59,7 @@ export class TopupsService {
         amountInCents: dto.amount,
         customerEmail: customerEmail ?? `${userId}@eciexpress.local`,
         paymentMethod: dto.paymentMethod,
-        paymentData: dto.paymentData,
+        paymentData: dto.paymentData as Record<string, unknown>,
       });
     } catch {
       // Si Wompi rechaza la creación, el topup queda FAILED para trazabilidad.

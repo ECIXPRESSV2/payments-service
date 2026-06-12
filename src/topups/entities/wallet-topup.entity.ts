@@ -8,14 +8,17 @@ import {
 } from 'typeorm';
 import { bigIntTransformer } from '../../common/transformers/bigint.transformer';
 
-/** Métodos de pago soportados para recargar la billetera via Wompi. */
+/**
+ * Métodos de pago soportados para recargar la billetera via Wompi.
+ *
+ * Bre-B está disponible en Wompi solo como QR interoperable desde el widget,
+ * no como payment_method en la API de transacciones. No implementar hasta que
+ * Wompi lo exponga en su API pública.
+ */
 export enum TopupPaymentMethod {
   NEQUI = 'NEQUI',
   DAVIPLATA = 'DAVIPLATA',
   PSE = 'PSE',
-  // TODO: Bre-B no está disponible en el sandbox de Wompi; queda en el enum pero no se
-  // implementa en el checkout hasta que la pasarela lo soporte.
-  BREB = 'BREB',
   CARD = 'CARD',
 }
 

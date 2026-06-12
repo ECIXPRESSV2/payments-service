@@ -2,6 +2,7 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
+import { swaggerCustomCss, swaggerCustomJs } from './config/swagger-custom-ui';
 import { execSync, exec } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -97,7 +98,11 @@ async function bootstrap() {
     .build();
 
   const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('api', app, document);
+  SwaggerModule.setup('api', app, document, {
+    customCss: swaggerCustomCss,
+    customJsStr: swaggerCustomJs,
+    swaggerOptions: { persistAuthorization: true },
+  });
 
   const port = process.env.PORT ?? 3004;
   await app.listen(port);
