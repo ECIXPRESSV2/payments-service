@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
-import { TopupStatus, WalletTopup } from './entities/wallet-topup.entity';
+import { TopupPaymentMethod, TopupStatus, WalletTopup } from './entities/wallet-topup.entity';
 import { CreateTopupDto } from './dto/create-topup.dto';
 import { WalletsService } from '../wallets/wallets.service';
 import { WompiService, WompiWebhookEvent } from '../wompi/wompi.service';
@@ -80,17 +80,31 @@ export class TopupsService {
       { wompiTransactionId, wompiResponse: wompiData as Record<string, any> },
     );
 
+    // Métodos que generan la redirectUrl de forma asíncrona: se hace polling hasta que
+    // aparezca. El frontend debe abrirla en nueva pestaña: window.open(redirectUrl, '_blank').
+    const METHODS_WITH_REDIRECT = [
+      TopupPaymentMethod.BANCOLOMBIA_TRANSFER,
+      TopupPaymentMethod.DAVIPLATA,
+      TopupPaymentMethod.PSE,
+    ];
+
+    let redirectUrl: string | null = null;
     const extra = (wompiData?.payment_method as Record<string, unknown>)
       ?.extra as Record<string, unknown> | undefined;
+    const immediateUrl = (extra?.url ?? extra?.async_payment_url) as string | undefined;
+
+    if (immediateUrl) {
+      redirectUrl = immediateUrl;
+    } else if (wompiTransactionId && METHODS_WITH_REDIRECT.includes(dto.paymentMethod)) {
+      redirectUrl = await this.wompiService.pollForRedirectUrl(wompiTransactionId);
+    }
 
     return {
       topupId: topup.id,
       status: topup.status,
       amount: topup.amount,
       paymentMethod: topup.paymentMethod,
-      // URL donde el usuario debe completar el pago (DAVIPLATA, PSE, BANCOLOMBIA_TRANSFER).
-      // El frontend debe abrirla en una nueva pestaña: window.open(redirectUrl, '_blank').
-      redirectUrl: (extra?.url ?? extra?.async_payment_url ?? null) as string | null,
+      redirectUrl,
       wompi: wompiData,
     };
   }

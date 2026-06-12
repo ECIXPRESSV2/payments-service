@@ -130,15 +130,56 @@ export class WompiService {
     }
   }
 
-  /** GET /transactions/:id → estado actual de la transacción. */
-  async getTransactionStatus(transactionId: string): Promise<string> {
-    const response = await axios.get<{ data: { status: string } }>(
+  /** GET /transactions/:id → datos completos de la transacción. */
+  async getTransaction(transactionId: string): Promise<Record<string, unknown>> {
+    const response = await axios.get<{ data: Record<string, unknown> }>(
       `${this.baseUrl}/transactions/${transactionId}`,
-      {
-        headers: { Authorization: `Bearer ${this.privateKey}` },
-      },
+      { headers: { Authorization: `Bearer ${this.privateKey}` } },
     );
-    return response.data.data.status;
+    return response.data.data;
+  }
+
+  /** GET /transactions/:id → solo el status. */
+  async getTransactionStatus(transactionId: string): Promise<string> {
+    const tx = await this.getTransaction(transactionId);
+    return tx.status as string;
+  }
+
+  /**
+   * Hace polling sobre GET /transactions/:id hasta que aparezca la URL de redirección
+   * en `payment_method.extra.async_payment_url` o `payment_method.extra.url`.
+   * Aplica a BANCOLOMBIA_TRANSFER, DAVIPLATA y PSE, que generan la URL de forma asíncrona.
+   * Devuelve null si la URL no aparece dentro del tiempo límite.
+   */
+  async pollForRedirectUrl(
+    transactionId: string,
+    maxAttempts = 10,
+    delayMs = 1000,
+  ): Promise<string | null> {
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const tx = await this.getTransaction(transactionId);
+      const extra = (tx?.payment_method as Record<string, unknown>)
+        ?.extra as Record<string, unknown> | undefined;
+      const url = (extra?.async_payment_url ?? extra?.url) as string | undefined;
+
+      if (url) {
+        this.logger.debug(`redirectUrl encontrada en intento ${attempt}: ${url}`);
+        return url;
+      }
+
+      this.logger.debug(
+        `Intento ${attempt}/${maxAttempts}: redirectUrl aún no disponible para tx ${transactionId}`,
+      );
+
+      if (attempt < maxAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+
+    this.logger.warn(
+      `redirectUrl no apareció en ${maxAttempts} intentos para tx ${transactionId}`,
+    );
+    return null;
   }
 
   /** GET /pse/financial_institutions → lista de bancos disponibles para PSE. */
